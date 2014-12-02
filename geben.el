@@ -2542,7 +2542,8 @@ The buffer commands are:
 				   :lineno lineno
 				   :level (string-to-number level)))))
       (goto-char (point-min)))
-    (geben-dbgp-display-window (geben-backtrace-buffer session))))
+    (unless no-select
+      (geben-dbgp-display-window (geben-backtrace-buffer session)))))
 
 (defun geben-backtrace (session)
   "Display backtrace."
