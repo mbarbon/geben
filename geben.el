@@ -2501,10 +2501,16 @@ The buffer commands are:
       (geben-backtrace-mode session))
     buf))
 
-(defun geben-backtrace (session)
-  "Display backtrace."
-  (unless (geben-session-active-p session)
-    (error "GEBEN is out of debugging session."))
+(defsubst geben-backtrace-buffer-visible-p (session)
+  (geben-session-buffer-visible-p session geben-backtrace-buffer-name))
+
+(defun geben-backtrace-refresh (session &optional force)
+  (when (and (geben-session-active-p session)
+             (or force
+                 (geben-backtrace-buffer-visible-p session)))
+    (geben-backtrace-display session (not force))))
+
+(defun geben-backtrace-display (session &optional no-select)
   (with-current-buffer (geben-backtrace-buffer session)
     (let ((inhibit-read-only t)
 	  (stack (geben-session-stack session)))
@@ -2527,6 +2533,12 @@ The buffer commands are:
 				   :level (string-to-number level)))))
       (goto-char (point-min)))
     (geben-dbgp-display-window (geben-backtrace-buffer session))))
+
+(defun geben-backtrace (session)
+  "Display backtrace."
+  (unless (geben-session-active-p session)
+    (error "GEBEN is out of debugging session."))
+  (geben-backtrace-display session))
 
 (defvar geben-backtrace-mode-map nil
   "Keymap for `geben-backtrace-mode'")
