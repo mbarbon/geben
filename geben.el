@@ -125,7 +125,7 @@ Typically `pop-to-buffer' or `switch-to-buffer'."
   (with-current-buffer buf
     (symbol-value 'geben-dynamic-property-buffer-p)))
 
-(defun geben-dbgp-display-window (buf)
+(defun geben-dbgp-display-window (buf role)
   "Display a buffer anywhere in a window, depends on the circumstance."
   (cond
    ((get-buffer-window buf)
@@ -951,7 +951,7 @@ A source object forms a property list with three properties
 			     (find-file-noselect local-path))
 			 (find-file-noselect local-path)))))))
     (when buf
-      (geben-dbgp-display-window buf)
+      (geben-dbgp-display-window buf 'code)
       buf)))
 
 ;; session storage
@@ -1716,7 +1716,7 @@ Key mapping and other information is described its help page."
 		      "Property"))
 	(goto-char (point-min))))
     (save-selected-window
-      (geben-dbgp-display-window buf))))
+      (geben-dbgp-display-window buf 'breakpoints))))
 
 ;; overlay
 
@@ -2373,13 +2373,13 @@ After fetching it calls CALLBACK function."
 	      (xml-get-attribute (nth depth (geben-session-stack session))
 				 'where)))
     (unless no-select
-      (geben-dbgp-display-window buf))
+      (geben-dbgp-display-window buf 'context))
     (geben-context-list-fetch session
 			      (geben-lexical-bind (buf no-select)
 				(lambda (session)
 				  (and (buffer-live-p buf)
 				       (not no-select)
-				       (geben-dbgp-display-window buf)))))))
+				       (geben-dbgp-display-window buf 'context)))))))
 
 ;;--------------------------------------------------------------
 ;; context mode
@@ -2543,7 +2543,7 @@ The buffer commands are:
 				   :level (string-to-number level)))))
       (goto-char (point-min)))
     (unless no-select
-      (geben-dbgp-display-window (geben-backtrace-buffer session)))))
+      (geben-dbgp-display-window (geben-backtrace-buffer session) 'backtrace))))
 
 (defun geben-backtrace (session)
   "Display backtrace."
@@ -2749,7 +2749,7 @@ The buffer commands are:
 		   (geben-redirect-coding-system (geben-session-redirect session)))))
 	(goto-char (or save-pos
 		       (point-max))))
-      (geben-dbgp-display-window buf))))
+      (geben-dbgp-display-window buf 'output))))
 
 (defun geben-dbgp-command-stdout (session mode)
   "Send `stdout' command."
