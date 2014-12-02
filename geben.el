@@ -125,8 +125,26 @@ Typically `pop-to-buffer' or `switch-to-buffer'."
   (with-current-buffer buf
     (symbol-value 'geben-dynamic-property-buffer-p)))
 
-(defun geben-dbgp-display-window (buf role)
-  "Display a buffer anywhere in a window, depends on the circumstance."
+(defun geben-dbgp-display-by-role (buf role)
+  (cond
+   ((get-buffer-window buf)
+    (select-window (get-buffer-window buf))
+    (switch-to-buffer buf))
+   (t
+    (let ((candidates (make-vector 2 nil)))
+      (walk-windows (lambda (window)
+                      (cond
+                       ((eql (window-parameter window 'geben-role) role)
+                        (aset candidates 0 window))
+                       ((eql (window-parameter window 'geben-role) 'misc)
+                        (aset candidates 1 window)))))
+      (select-window (or (aref candidates 0)
+			 (aref candidates 1)
+			 (selected-window)))
+      (switch-to-buffer buf))))
+  buf)
+
+(defun geben-dbgp-display-classic (buf role)
   (cond
    ((get-buffer-window buf)
     (select-window (get-buffer-window buf))
@@ -153,6 +171,12 @@ Typically `pop-to-buffer' or `switch-to-buffer'."
 			 (selected-window)))
       (switch-to-buffer buf))))
   buf)
+
+(defun geben-dbgp-display-window (buf role)
+  "Display a buffer anywhere in a window, depends on the circumstance."
+  (if geben-original-frame-configuration
+      (geben-dbgp-display-by-role buf role)
+    (geben-dbgp-display-classic buf role)))
 
 ;;  (when (buffer-live-p buf)
 ;;    (or (eq buf (get-buffer geben-context-buffer-name))
