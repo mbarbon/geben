@@ -3001,6 +3001,7 @@ of the function is passed to feature_set DBGp command."
 (add-hook 'geben-dbgp-continuous-command-hook #'geben-dbgp-stack-update)
 (add-hook 'geben-dbgp-continuous-command-hook #'geben-dbgp-breakpoint-list-refresh)
 (add-hook 'geben-dbgp-stack-update-hook #'geben-context-list-refresh)
+(add-hook 'geben-dbgp-stack-update-hook (lambda (session depth) (geben-backtrace-refresh session)))
 
 
 ;;==============================================================
