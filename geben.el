@@ -350,6 +350,7 @@ If POS is omitted, then the current position is used."
 (defconst geben-context-buffer-name "*GEBEN<%s> context*"
   "Name for context buffer.")
 
+(defvar geben-original-frame-configuration nil)
 (defvar geben-sessions nil)
 (defvar geben-current-session nil)
 
@@ -405,6 +406,15 @@ at the entry line of the script."
 	,@body))))
 
 ;; initialize
+
+(defun geben-save-frame-configuration ()
+  (when (not geben-original-frame-configuration)
+    (setq geben-original-frame-configuration (current-frame-configuration))))
+
+(defun geben-restore-frame-configuration ()
+  (when geben-original-frame-configuration
+    (set-frame-configuration geben-original-frame-configuration t)
+    (setq geben-original-frame-configuration nil)))
 
 (defsubst geben-session-init (session init-msg)
   "Initialize a session of a process PROC."
@@ -2879,7 +2889,9 @@ and call `geben-dbgp-entry' with each chunk."
       (ignore-errors
 	(geben-session-release session))
       (accept-process-output)
-      (setq geben-sessions (remq session geben-sessions)))))
+      (setq geben-sessions (remq session geben-sessions))
+      (unless geben-sessions
+        (geben-restore-frame-configuration)))))
 
 (add-hook 'kill-emacs-hook (lambda ()
 			     (dolist (session geben-sessions)
