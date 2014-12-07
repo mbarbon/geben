@@ -128,8 +128,10 @@ to connect to DBGp listener of this address."
       (car (xml-node-children
 	    (car (xml-get-children err 'message)))))))
 
-(defsubst dbgp-make-listner-name (port)
-  (format "DBGp listener<%d>" port))
+(defsubst dbgp-make-listener-name (address)
+  (format "DBGp listener<%s>"
+          (or (dbgp-address-port address)
+              (dbgp-address-path address))))
 
 (defsubst dbgp-process-kill (proc)
   "Kill DBGp process PROC."
@@ -140,12 +142,24 @@ to connect to DBGp listener of this address."
   ;;      (set-process-buffer proc (current-buffer)))))
   )
 
+(defsubst dbgp-family-get (proc)
+  (process-contact proc :family))
+
 (defsubst dbgp-ip-get (proc)
   (first (process-contact proc)))
   
 (defsubst dbgp-port-get (proc)
   (second (process-contact proc)))
   
+(defsubst dbgp-path-get (proc)
+  (second (process-contact proc)))
+
+(defun dbgp-address-get (proc)
+  (let ((family (process-contact proc :family)))
+    (if (equal family 'local)
+        (list :family family :path (dbgp-path-get proc))
+      (list :family family :port (dbgp-port-get proc)))))
+
 (defsubst dbgp-proxy-p (proc)
   (and (dbgp-plist-get proc :proxy)
        t))
@@ -155,6 +169,36 @@ to connect to DBGp listener of this address."
 
 (defsubst dbgp-listener-get (proc)
   (dbgp-plist-get proc :listener))
+
+(defsubst dbgp-is-local (port-or-path)
+  (equal (aref port-or-path 0) ?/))
+
+(defun dbgp-make-address-spec (port-or-path)
+  (if (dbgp-is-local port-or-path)
+      (list :path port-or-path :family 'local)
+    (list :port (string-to-number port-or-path) :family 'ipv4)))
+
+(defun dbgp-describe-address (address)
+  (if (dbgp-address-is-local address)
+      (dbgp-address-path address)
+    (format ":%d" (dbgp-address-port address))))
+
+(defsubst dbgp-address-is-local (address)
+  (equal (plist-get address :family) 'local))
+
+(defsubst dbgp-address-family (address)
+  (plist-get address :family))
+
+(defsubst dbgp-address-port (address)
+  (plist-get address :port))
+
+(defsubst dbgp-address-path (address)
+  (plist-get address :path))
+
+(defsubst dbgp-address-equal (a b)
+  (and (equal (dbgp-address-family a) (dbgp-address-family b))
+       (equal (dbgp-address-port a) (dbgp-address-port b))
+       (equal (dbgp-address-path a) (dbgp-address-path b))))
 
 ;;--------------------------------------------------------------
 ;; DBGp
@@ -302,13 +346,17 @@ See `read-from-minibuffer' for details of HISTORY argument."
 ;; DBGp listener start/stop
 ;;--------------------------------------------------------------
 
-(defsubst dbgp-listener-find (port)
-  (find-if (lambda (listener)
-	     (eq port (second (process-contact listener))))
-	   dbgp-listeners))
+(defsubst dbgp-listener-find (address)
+  (let ((path (dbgp-address-path address))
+        (port (dbgp-address-port address)))
+    (find-if (lambda (listener)
+               (if port
+                   (eq port (dbgp-port-get listener))
+                 (equal path (dbgp-path-get listener))))
+             dbgp-listeners)))
 
 ;;;###autoload
-(defun dbgp-start (port)
+(defun dbgp-start (address)
   "Start a new DBGp listener listening to PORT."
   (interactive (let (;;(addrs (mapcar (lambda (intf)
 		     ;;		      (format-network-address (cdar (network-interface-list)) t))
@@ -322,12 +370,13 @@ See `read-from-minibuffer' for details of HISTORY argument."
 		 ;;		 (or addrs
 		 ;;		     (error "This machine has no network interface to bind."))
 		 (list
+                  :port
 		  ;;		  (completing-read (format "Listener address to bind(default %s): " default)
 		  ;;				   addrs nil t
 		  ;;				   'dbgp-listener-address-history default)
 		  (dbgp-read-integer (format "Listen port(default %s): " port-default)
 				     port-default 'dbgp-listener-port-history))))
-  (let ((result (dbgp-exec port
+  (let ((result (dbgp-exec address
 			   :session-accept 'dbgp-default-session-accept-p
 			   :session-init 'dbgp-default-session-init
 			   :session-filter 'dbgp-default-session-filter
@@ -337,33 +386,39 @@ See `read-from-minibuffer' for details of HISTORY argument."
     result))
 
 ;;;###autoload
-(defun dbgp-exec (port &rest session-params)
-  "Start a new DBGp listener listening to PORT."
-  (if (dbgp-listener-alive-p port)
-      (cons (dbgp-listener-find port)
-	    (format "The DBGp listener for %d has already been started." port))
-    (let ((listener (make-network-process :name (dbgp-make-listner-name port)
-					  :server 1
-					  :service port
-					  :family 'ipv4
-					  :nowait t
-					  :noquery t
-					  :filter 'dbgp-comint-setup
-					  :sentinel 'dbgp-listener-sentinel
-					  :log 'dbgp-listener-log)))
+(defun dbgp-exec (address &rest session-params)
+  "Start a xnew DBGp listener listening to PORT."
+  (if (dbgp-listener-alive-p address)
+      (cons (dbgp-listener-find address)
+	    (format "The DBGp listener for %s has already been started."
+                    (dbgp-describe-address address)))
+    (let* ((service (if (dbgp-address-is-local address)
+                        (dbgp-address-path address)
+                      (dbgp-address-port address)))
+           (family (dbgp-address-family address))
+           (listener (make-network-process :name (dbgp-make-listener-name address)
+                                           :server 1
+                                           :service service
+                                           :family family
+                                           :nowait t
+                                           :noquery t
+                                           :filter 'dbgp-comint-setup
+                                           :sentinel 'dbgp-listener-sentinel
+                                           :log 'dbgp-listener-log)))
       (unless listener
-	(error "Failed to create DBGp listener for port %d" port))
+	(error "Failed to create DBGp listener for %s" (dbgp-describe-address address)))
       (dbgp-plist-put listener :listener listener)
       (and session-params
 	   (nconc (process-plist listener) session-params))
       (setq dbgp-listeners (cons listener
-				 (remq (dbgp-listener-find port) dbgp-listeners)))
+				 (remq (dbgp-listener-find address) dbgp-listeners)))
       (cons listener
-	    (format "The DBGp listener for %d is started." port)))))
+	    (format "The DBGp listener for %s is started." (dbgp-describe-address address))))))
 
-(defun dbgp-stop (port &optional include-proxy)
+(defun dbgp-stop (address &optional include-proxy)
   "Stop the DBGp listener listening to PORT."
   (interactive
+   ; TODO handle UNIX socket
    (let ((ports (remq nil
 		      (mapcar (lambda (listener)
 				(and (or current-prefix-arg
@@ -372,21 +427,21 @@ See `read-from-minibuffer' for details of HISTORY argument."
 			      dbgp-listeners))))
      (list
       ;; ask user for the target idekey.
-      (read (completing-read "Listener port: " ports nil t
-			     (and (eq 1 (length ports))
-				  (car ports))))
-      current-prefix-arg)))
-  (let ((listener (dbgp-listener-find port)))
-    (dbgp-listener-kill port)
+      (list :port (read (completing-read "Listener port: " ports nil t
+                                         (and (eq 1 (length ports))
+                                              (car ports))))
+            current-prefix-arg))))
+  (let ((listener (dbgp-listener-find address)))
+    (dbgp-listener-kill address)
     (and (interactive-p)
 	 (message (if listener
-		      "The DBGp listener for port %d is terminated." 
-		    "DBGp listener for port %d does not exist.")
-		  port))
+		      "The DBGp listener for %s is terminated."
+		    "DBGp listener for %s does not exist.")
+		  (dbgp-describe-address address)))
     (and listener t)))
 
-(defun dbgp-listener-kill (port)
-  (let ((listener (dbgp-listener-find port)))
+(defun dbgp-listener-kill (&rest address)
+  (let ((listener (dbgp-listener-find address)))
     (when listener
       (delete-process listener))))
 
@@ -629,12 +684,12 @@ or a symbol: `:proxy-not-found', `:no-response', or `:invalid-xml'."
 	       (setq xml (car (xml-parse-region (point-min) (point-max)))))
 	      :invalid-xml))))))
 
-(defun dbgp-listener-alive-p (port)
+(defun dbgp-listener-alive-p (address)
   "Return t if any listener for POST is alive."
-  (let ((listener (dbgp-listener-find port)))
+  (let ((listener (dbgp-listener-find address)))
     (and listener
 	 (eq 'listen (process-status listener)))))
-  
+
 ;;--------------------------------------------------------------
 ;; DBGp listener process log and sentinel
 ;;--------------------------------------------------------------

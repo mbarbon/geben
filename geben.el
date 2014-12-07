@@ -459,12 +459,19 @@ at the entry line of the script."
   (let* ((initmsg (geben-session-initmsg session))
 	 (process (geben-session-process session))
 	 (listener (dbgp-plist-get process :listener))
-	 (storage (if (dbgp-proxy-p process)
-		      (list :proxy t
-			    :addr (xml-get-attribute initmsg 'hostname)
-			    :idekey (xml-get-attribute initmsg 'idekey))
-		    (list :proxy nil
-			  :port (second (process-contact listener))))))
+	 (storage (cond
+                   ((dbgp-proxy-p process)
+                    (list :proxy t
+                          :addr (xml-get-attribute initmsg 'hostname)
+                          :idekey (xml-get-attribute initmsg 'idekey)))
+                   ((equal (dbgp-family-get listener) 'local)
+                    (list :family 'local
+                          :proxy nil
+                          :path (dbgp-path-get listener)))
+                   (t
+		    (list :family (dbgp-family-get listener)
+                          :proxy nil
+			  :port (dbgp-port-get listener))))))
     (nconc storage (list :language (geben-session-language session)
 			 :fileuri (xml-get-attribute initmsg 'fileuri)))
     (add-to-list 'geben-storages storage)
@@ -481,17 +488,22 @@ at the entry line of the script."
 	 (process (geben-session-process session))
 	 (listener (dbgp-plist-get process :listener))
 	 (proxy-p (dbgp-proxy-p listener))
-	 (port (second (process-contact listener))))
+         (local-family (equal (dbgp-family-get listener) 'local))
+	 (port-or-path (dbgp-port-get listener)))
     (find-if (lambda (storage)
 	       (and (eq (not proxy-p)
 			(not (plist-get storage :proxy)))
 		    (eq (geben-session-language session)
 			(plist-get storage :language))
 		    (equal fileuri (plist-get storage :fileuri))
-		    (if proxy-p
-			(and (equal addr (plist-get storage :addr))
-			     (equal idekey (plist-get storage :idekey)))
-		      (eq port (plist-get storage :port)))))
+                    (cond
+                     (proxy-p
+                      (and (equal addr (plist-get storage :addr))
+                           (equal idekey (plist-get storage :idekey))))
+                     (local-family
+                      (equal port-or-path (plist-get storage :path)))
+                     (t
+		      (eq port-or-path (plist-get storage :port))))))
 	     geben-storages)))
 
 (defsubst geben-session-release (session)
@@ -519,14 +531,19 @@ at the entry line of the script."
 
 (defsubst geben-session-buffer-name (session format-string)
   (let* ((proc (geben-session-process session))
-	 (idekey (plist-get (dbgp-proxy-get proc) :idekey)))
+	 (idekey (plist-get (dbgp-proxy-get proc) :idekey))
+         (listener (dbgp-listener-get proc)))
     (format format-string
 	    (concat (if idekey
 			(format "%s:" idekey)
 		      "")
-		    (format "%s:%s"
-			    (dbgp-ip-get proc)
-			    (dbgp-port-get (dbgp-listener-get proc)))))))
+                    (cond
+                     ((equal (dbgp-family-get proc) 'local)
+                      (dbgp-path-get proc))
+                     (t
+                      (format "%s:%s"
+                              (dbgp-ip-get proc)
+                              (dbgp-port-get listener))))))))
 
 (defsubst geben-session-buffer (session format-string)
   (get-buffer-create (geben-session-buffer-name session format-string)))
@@ -549,7 +566,10 @@ at the entry line of the script."
   "Setup temporary directory."
   (let* ((proc (geben-session-process session))
 	 (gebendir (file-truename geben-temporary-file-directory))
-	 (leafdir (format "%d" (second (process-contact proc))))
+         (port-or-path (second (process-contact proc)))
+         (leafdir (if (dbgp-is-local port-or-path)
+                      (secure-hash 'md5 port-or-path)
+                    (number-to-string port-or-path)))
 	 (tempdir (expand-file-name leafdir gebendir)))
     (unless (file-directory-p gebendir)
       (make-directory gebendir t)
@@ -2808,10 +2828,10 @@ The buffer commands are:
 ;; DBGp starter
 ;;==============================================================
 
-(defun geben-dbgp-start (port)
+(defun geben-dbgp-start (address)
   "Create DBGp listeners at each CONNECTION-POINTS."
   (condition-case error-sexp
-      (let* ((result (dbgp-exec port
+      (let* ((result (dbgp-exec address
 				:session-accept 'geben-dbgp-session-accept-p
 				:session-init 'geben-dbgp-session-init
 				:session-filter 'geben-dbgp-session-filter
@@ -2819,10 +2839,10 @@ The buffer commands are:
 	     (listener (and (consp result)
 			    (car result))))
 	(when (processp listener)
-	  (message "Waiting for debug server to connect at port %s." port)))
+	  (message "Waiting for debug server to connect at %s." (dbgp-describe-address address))))
     (error
      (beep)
-     (read-char (format "[port %s] %s" port (second error-sexp))
+     (read-char (format "[%s] %s" (dbgp-describe-address address) (second error-sexp))
 		nil 3))))
 
 (defun geben-dbgp-start-proxy (ip-or-addr port idekey ;;multi-session-p
@@ -2858,18 +2878,18 @@ The buffer commands are:
 		   (not (some (lambda (session)
 				(eq proxy (dbgp-plist-get proc :proxy)))
 			      geben-sessions))))
-	   (let ((port (dbgp-port-get (dbgp-listener-get proc))))
+	   (let ((address (dbgp-address-get (dbgp-listener-get proc))))
 	     (not (some (lambda (session)
 			  (let ((oproc (geben-session-process session)))
 			    (and oproc
 				 (not (dbgp-proxy-p oproc))
-				 (eq port (dbgp-port-get (dbgp-listener-get oproc))))))
+				 (dbgp-address-equal address (dbgp-address-get (dbgp-listener-get oproc))))))
 			geben-sessions))))))
     (unless accept-p
       (message "GEBEN: Rejected new connection from %s (Already in debugging)"
 	       (car (process-contact proc))))
     accept-p))
-	
+
 (defun geben-dbgp-session-init (proc)
   "Initialize SESSION environment."
   (let ((session (geben-session-make :process proc)))
@@ -3595,12 +3615,26 @@ from \`redirect', \`intercept' and \`disabled'."
 			t)))
 	(when file-path
 	  (geben-open-file (geben-source-fileuri session file-path))))))
-  
+
+(defun geben-dbgp-default-address ()
+  (if (equal geben-dbgp-default-family 'ipv4)
+      (list :family 'ivp4 :port geben-dbgp-default-port)
+    (list :family 'local :path geben-dbgp-default-path)))
+
+(defcustom geben-dbgp-default-family 'ipv4
+  "Default address family for a new DBGp connection."
+  :group 'geben
+  :type 'symbol)
 
 (defcustom geben-dbgp-default-port 9000
   "Default port number to listen a new DBGp connection."
   :group 'geben
   :type 'integer)
+
+(defcustom geben-dbgp-default-path ""
+  "Default UNIX socket path to listen a new DBGp connection."
+  :group 'geben
+  :type 'string)
 
 (defcustom geben-dbgp-default-proxy '("127.0.0.1" 9001 "default" nil t)
   "Default setting for a new DBGp proxy connection.
@@ -3650,8 +3684,9 @@ described its help page."
   (interactive "p")
   (case args
     (1
-     (geben-dbgp-start geben-dbgp-default-port))
+     (geben-dbgp-start (geben-dbgp-default-address)))
     (4
+     ; TODO handle UNIX socket
      (let ((default (or (car dbgp-listener-port-history)
 			geben-dbgp-default-port
 			(default-value 'geben-dbgp-default-port))))
@@ -3664,29 +3699,30 @@ described its help page."
     (t
      (call-interactively 'geben-proxy-end))))
 
-(defun geben-end (port)
+(defun geben-end (port-or-path)
   "Stop the DBGp listener on PORT."
   (interactive
-   (let ((ports (remq nil
+   (let ((addrs (remq nil
 		      (mapcar (lambda (listener)
 				(and (not (dbgp-proxy-p listener))
-				     (number-to-string (second (process-contact listener)))))
+                                     (dbgp-address-get listener))
 			      dbgp-listeners))))
      (list
-      (if (= 1 (length ports))
-	  (string-to-number (car ports))
+      (if (= 1 (length addrs))
+	  (car addrs)
 	;; ask user for the target idekey.
 	(let ((num (completing-read "Listener port to kill: " ports nil t)))
 	  (if (string< "" num)
 	      (read num)
-	    (signal 'quit nil)))))))
-  (let ((listener (dbgp-listener-find port)))
-    (dbgp-listener-kill port)
+	    (signal 'quit nil))))))))
+  (let* ((address (dbgp-make-address-spec port-or-path))
+         (listener (dbgp-listener-find address)))
+    (dbgp-listener-kill address)
     (and (interactive-p)
-	 (message (if listener
-		      "The DBGp listener for port %d is terminated." 
-		    "DBGp listener for port %d does not exist.")
-		  port))
+         (message (if listener
+                      "The DBGp listener for %s is terminated."
+                    "DBGp listener for %s does not exist.")
+                  (dbgp-describe-address address)))
     (and listener t)))
 
 (defun geben-proxy (ip-or-addr port idekey ;;multi-session-p
